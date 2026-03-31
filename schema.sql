@@ -29,7 +29,7 @@ CREATE TABLE cases (
 CREATE TABLE evidence (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     case_id UUID REFERENCES cases(id) ON DELETE CASCADE,
-    tab_name TEXT NOT NULL, -- e.g., 'Mensaje', 'Recibo'
+    tab_name TEXT NOT NULL, -- e.g., 'Message', 'Receipt'
     content TEXT NOT NULL,
     display_order INTEGER DEFAULT 0
 );
@@ -91,9 +91,9 @@ BEGIN
 
     -- Evidence
     INSERT INTO evidence (case_id, tab_name, content, display_order) VALUES
-    (case_uuid, 'Recibo', 'Café €1.50 / Tostada €2.00 / Zumo de naranja €2.50 / Total €6.00 / Mesa 4 / 08:47', 1),
-    (case_uuid, 'Mensaje', '¿Dónde está mi desayuno? ¡Mesa 4! Llevo 20 minutos esperando.', 2),
-    (case_uuid, 'Nota', 'Mesa 4 — cliente muy impaciente. Pedido: cocina.', 3);
+    (case_uuid, 'Receipt', 'Café €1.50 / Tostada €2.00 / Zumo de naranja €2.50 / Total €6.00 / Mesa 4 / 08:47', 1),
+    (case_uuid, 'Message', '¿Dónde está mi desayuno? ¡Mesa 4! Llevo 20 minutos esperando.', 2),
+    (case_uuid, 'Note', 'Mesa 4 — cliente muy impaciente. Pedido: cocina.', 3);
 
     -- Witness
     INSERT INTO witness_interactions (case_id, witness_name, 
@@ -110,4 +110,66 @@ BEGIN
     (case_uuid, 'The customer ordered at the wrong table', false),
     (case_uuid, 'The order is ready but the waiter never collected it from the kitchen', true),
     (case_uuid, 'The café was closed that morning', false);
+END $$;
+
+-- Seed the second case: "La llave perdida"
+DO $$
+DECLARE
+    case_uuid UUID;
+BEGIN
+    INSERT INTO cases (language_code, title, difficulty, description, setting)
+    VALUES ('es', 'La llave perdida', 'A1', 'A neighbour notices Ana''s front door is wide open. Ana has no idea how.', 'An apartment building in Barcelona, Monday evening')
+    RETURNING id INTO case_uuid;
+
+    INSERT INTO evidence (case_id, tab_name, content, display_order) VALUES
+    (case_uuid, 'Message', 'Hola Ana. Tu puerta está abierta. ¿Estás bien?', 1),
+    (case_uuid, 'Receipt', 'Copia de llave x1 — €3.50. Martes 16:20.', 2),
+    (case_uuid, 'Diary', 'Martes: mi llave, ¿dónde está? Busco en casa pero nada.', 3);
+
+    INSERT INTO witness_interactions (case_id, witness_name,
+        question_1_target, question_1_native, reply_1_target,
+        question_2_target, question_2_native, reply_2_target,
+        question_3_target, question_3_native, reply_3_target)
+    VALUES (case_uuid, 'Elena, la vecina',
+        '¿Viste a alguien en el pasillo?', 'Did you see anyone in the hallway?', 'Sí. Un hombre joven. No lo conozco.',
+        '¿A qué hora viste la puerta abierta?', 'What time did you see the door open?', 'A las seis de la tarde, más o menos.',
+        '¿Es normal esto?', 'Is this normal?', 'No. Ana es muy ordenada.');
+
+    INSERT INTO deductions (case_id, option_text, is_correct) VALUES
+    (case_uuid, 'Ana lost her key by accident', false),
+    (case_uuid, 'Someone made a copy of Ana''s key and entered', true),
+    (case_uuid, 'The neighbour left the door open', false);
+END $$;
+
+-- Seed the third case: "El restaurante cerrado"
+DO $$
+DECLARE
+    case_uuid UUID;
+BEGIN
+    INSERT INTO cases (language_code, title, difficulty, description, setting)
+    VALUES ('es', 'El restaurante cerrado', 'A2', 'A popular restaurant closed without explanation on its busiest night. The owner is not answering calls.', 'A restaurant in Seville, Saturday night')
+    RETURNING id INTO case_uuid;
+
+    -- Evidence
+    INSERT INTO evidence (case_id, tab_name, content, display_order) VALUES
+    (case_uuid, 'Voicemail', 'Escucha, necesito hablar contigo. El propietario llegó tarde esa noche. Muy tarde. Nadie sabe por qué.', 1),
+    (case_uuid, 'Message', 'No vengas mañana. El restaurante estará cerrado.', 2),
+    (case_uuid, 'Review', 'Llegamos a las 9. Todo cerrado. Sin explicación. Qué vergüenza.', 3),
+    (case_uuid, 'Receipt', 'Cena para dos, vino tinto. Total €66. 21:14.', 4);
+
+    -- Witness
+    INSERT INTO witness_interactions (case_id, witness_name,
+        question_1_target, question_1_native, reply_1_target,
+        question_2_target, question_2_native, reply_2_target,
+        question_3_target, question_3_native, reply_3_target)
+    VALUES (case_uuid, 'Marco, el camarero',
+        '¿Trabajaste esa noche?', 'Did you work that night?', 'Sí. Hasta las diez. Después el jefe me dijo que me fuera.',
+        '¿Había clientes cuando cerraste?', 'Were there customers when you closed?', 'Una pareja. En la mesa del fondo. No los conocía.',
+        '¿El propietario estaba nervioso?', 'Was the owner nervous?', 'Nervioso, sí. Recibió una llamada y cambió.');
+
+    -- Deductions
+    INSERT INTO deductions (case_id, option_text, is_correct) VALUES
+    (case_uuid, 'The restaurant was closed for renovation', false),
+    (case_uuid, 'The owner closed early to have a private dinner with someone', true),
+    (case_uuid, 'The chef forgot to open the restaurant', false);
 END $$;

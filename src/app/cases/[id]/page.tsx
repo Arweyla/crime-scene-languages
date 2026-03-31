@@ -5,8 +5,9 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import WordClicker from '@/components/WordClicker';
 import WitnessSection from '@/components/WitnessSection';
-import { ChevronRight, Search, FileText, CheckCircle2, XCircle, Loader2, Trophy, BookOpen, ArrowRight } from 'lucide-react';
+import { ChevronRight, Search, FileText, CheckCircle2, XCircle, Loader2, Trophy, BookOpen, ArrowRight, ShieldCheck } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/components/AuthProvider';
 
 interface CaseData {
   id: string;
@@ -31,299 +32,295 @@ interface CaseData {
   deductions: Array<{ option_text: string; is_correct: boolean }>;
 }
 
+const tabTranslations: Record<string, string> = {
+  'Mensaje': 'Message', 'Recibo': 'Receipt', 'Diario': 'Diary',
+  'Nota': 'Note', 'Buzón': 'Voicemail', 'Reseña': 'Review'
+};
+
 export default function CasePage() {
   const { id } = useParams();
+  const caseId = id as string;
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState(0);
   const [selectedDeduction, setSelectedDeduction] = useState<number | null>(null);
   const [caseData, setCaseData] = useState<CaseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showComplete, setShowComplete] = useState(false);
-  const [sessionWords, setSessionWords] = useState<Map<string, string>>(new Map());
+  const [learnedWordsCount, setLearnedWordsCount] = useState(0);
+  const [finalWords, setFinalWords] = useState<any[]>([]);
 
   useEffect(() => {
     async function fetchCaseData() {
-      if (!id) return;
-      
+      if (!caseId) return;
       try {
         setLoading(true);
-        
-        // 1. Fetch Case
-        const { data: caseInfo, error: caseError } = await supabase
-          .from('cases')
-          .select('*')
-          .eq('id', id)
-          .single();
-
-        if (caseError) throw caseError;
+        const { data: caseInfo } = await supabase.from('cases').select('*').eq('id', caseId).single();
         if (!caseInfo) throw new Error('Case not found');
-
-        // 2. Fetch Evidence
-        const { data: evidence, error: evidenceError } = await supabase
-          .from('evidence')
-          .select('*')
-          .eq('case_id', id)
-          .order('display_order', { ascending: true });
-
-        if (evidenceError) throw evidenceError;
-
-        // 3. Fetch Witness Interaction
-        const { data: witness, error: witnessError } = await supabase
-          .from('witness_interactions')
-          .select('*')
-          .eq('case_id', id)
-          .single();
-
-        if (witnessError) throw witnessError;
-
-        // 4. Fetch Deductions
-        const { data: deductions, error: deductionsError } = await supabase
-          .from('deductions')
-          .select('*')
-          .eq('case_id', id);
-
-        if (deductionsError) throw deductionsError;
-
-        setCaseData({
-          ...caseInfo,
-          evidence: evidence || [],
-          witness: witness,
-          deductions: deductions || []
-        });
+        const { data: evidence } = await supabase.from('evidence').select('*').eq('case_id', caseId).order('display_order', { ascending: true });
+        const { data: witness } = await supabase.from('witness_interactions').select('*').eq('case_id', caseId).single();
+        const { data: deductions } = await supabase.from('deductions').select('*').eq('case_id', caseId);
+        setCaseData({ ...caseInfo, evidence: evidence || [], witness: witness, deductions: deductions || [] });
       } catch (err: any) {
-        console.error('Error fetching case data:', err);
-        setError(err.message || 'An error occurred while loading the case.');
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     }
-
     fetchCaseData();
-  }, [id]);
+  }, [caseId]);
 
-  const handleWordClick = (word: string, translation: string) => {
-    setSessionWords(prev => {
-      const next = new Map(prev);
-      next.set(word, translation);
-      return next;
-    });
-  };
-
-  const handleDeductionClick = (idx: number) => {
+  const handleDeductionClick = async (idx: number) => {
     setSelectedDeduction(idx);
     if (caseData?.deductions[idx].is_correct) {
+      if (user) {
+        console.log(`[Fetch] Summary words for user ${user.id} and case ${caseId}`);
+        const { data } = await supabase
+          .from('learned_words')
+          .select('word, translation')
+          .eq('user_id', user.id)
+          .eq('case_id', caseId);
+        
+        setFinalWords(data || []);
+        setLearnedWordsCount(data?.length || 0);
+      }
       setTimeout(() => setShowComplete(true), 1500);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <Loader2 className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">Analyzing the crime scene...</p>
-        </div>
+  if (loading) return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-zinc-950 text-neon-blue">
+      <div className="relative">
+        <Loader2 className="w-16 h-16 animate-spin opacity-50" />
+        <div className="absolute inset-0 blur-xl bg-neon-blue/20 animate-pulse" />
       </div>
-    );
-  }
+      <p className="mt-6 font-black uppercase tracking-[0.3em] text-xs">Retrieving Evidence Files...</p>
+    </div>
+  );
 
-  if (error || !caseData) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
-          <XCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Case Unreachable</h1>
-          <p className="text-gray-600 mb-6">{error || 'This case file seems to be missing.'}</p>
-          <button 
-            onClick={() => window.location.href = '/'}
-            className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 transition-all"
-          >
-            Back to Bureau
-          </button>
-        </div>
-      </div>
-    );
-  }
+  if (error || !caseData) return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-zinc-950 text-case-red p-6 text-center">
+      <XCircle className="w-12 h-12 mb-4" />
+      <h2 className="text-2xl font-black uppercase tracking-tight">Database Error</h2>
+      <p className="text-zinc-500 mt-2 max-w-md">{error || 'Case file corrupted or not found.'}</p>
+      <Link href="/" className="mt-8 bg-zinc-900 border border-white/10 px-6 py-2 rounded-xl text-white font-bold hover:bg-zinc-800 transition-all">
+        Return to Bureau
+      </Link>
+    </div>
+  );
 
   return (
-    <main className="min-h-screen bg-gray-50 pb-20 relative">
-      {/* Case Complete Overlay */}
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 bg-mesh-noir scanline relative overflow-hidden pb-32">
       {showComplete && (
-        <div className="fixed inset-0 z-50 bg-zinc-950 flex items-center justify-center p-6 animate-in fade-in duration-500">
-          <div className="max-w-2xl w-full bg-zinc-900 rounded-3xl p-10 shadow-2xl border border-zinc-800 text-center text-white">
-            <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-              <Trophy className="w-10 h-10 text-green-500" />
-            </div>
-            <h1 className="text-4xl font-black uppercase tracking-tighter mb-2">Case Solved!</h1>
-            <p className="text-zinc-400 mb-10 text-lg leading-relaxed">
-              Excellent work, Detective. Your linguistic analysis was critical to closing this investigation.
-            </p>
-
-            <div className="bg-zinc-800/50 rounded-2xl p-6 mb-10 border border-zinc-700/50">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-500 mb-4 flex items-center justify-center gap-2">
-                <BookOpen className="w-4 h-4" />
-                Intelligence Gathered ({sessionWords.size} words)
-              </h3>
-              {sessionWords.size > 0 ? (
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {Array.from(sessionWords.entries()).map(([word, translation]) => (
-                    <div key={word} className="bg-zinc-900 border border-zinc-700 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                      <span className="font-bold text-blue-400">{word}</span>
-                      <span className="text-zinc-500 text-xs">→</span>
-                      <span className="text-zinc-300 text-sm font-medium">{translation}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-zinc-600 italic">No new words were logged during this investigation.</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Link 
-                href="/"
-                className="bg-white text-zinc-950 py-4 rounded-xl font-bold hover:bg-zinc-200 transition-all flex items-center justify-center gap-2"
-              >
-                Return to Bureau
-              </Link>
-              <Link 
-                href="/dictionary"
-                className="bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
-              >
-                View Full Dictionary
-                <ArrowRight className="w-5 h-5" />
-              </Link>
+        <div className="fixed inset-0 z-[100] bg-zinc-950/95 backdrop-blur-2xl flex items-center justify-center p-6 animate-in fade-in duration-700">
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-neon-blue/10 blur-[120px] rounded-full" />
+          </div>
+          
+          <div className="max-w-3xl w-full relative">
+            <div className="text-center">
+              <div className="inline-flex items-center justify-center w-24 h-24 rounded-[32px] bg-zinc-900 border border-case-green/50 shadow-[0_0_50px_rgba(59,255,122,0.2)] mb-8 animate-float">
+                <Trophy className="w-12 h-12 text-case-green" />
+              </div>
+              
+              <h1 className="text-6xl font-black uppercase tracking-tightest mb-2 bg-gradient-to-b from-white to-zinc-500 bg-clip-text text-transparent">
+                Case Closed
+              </h1>
+              <p className="text-neon-blue font-black uppercase tracking-[0.4em] text-sm mb-12">Intelligence Assessment: SUCCESSFUL</p>
+              
+              <div className="bg-zinc-900/50 rounded-[40px] p-10 mb-12 border border-white/5 backdrop-blur-md relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-case-green to-transparent opacity-50" />
+                
+                <h3 className="text-xs font-black uppercase tracking-[0.3em] text-zinc-500 mb-8 flex items-center justify-center gap-3">
+                  <BookOpen className="w-4 h-4 text-neon-yellow" />
+                  Vocabulary Intel Acquired
+                </h3>
+                
+                {finalWords.length > 0 ? (
+                  <div className="flex flex-wrap gap-3 justify-center max-h-[240px] overflow-y-auto pr-2 custom-scrollbar">
+                    {finalWords.map((w, i) => (
+                      <div key={i} className="bg-zinc-950/80 border border-white/10 px-4 py-2.5 rounded-2xl flex items-center gap-3 transition-all hover:border-neon-blue/30 group">
+                        <span className="font-black text-white group-hover:text-neon-blue transition-colors">{w.word}</span>
+                        <ArrowRight className="w-3 h-3 text-zinc-700" />
+                        <span className="text-zinc-400 text-sm font-medium">{w.translation}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-8 text-zinc-600 italic font-medium">
+                    No linguistic data was recorded during this operation.
+                  </div>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <Link 
+                  href="/" 
+                  className="bg-zinc-900 border border-white/10 text-white py-5 rounded-2xl font-black uppercase tracking-widest transition-all hover:bg-zinc-800 hover:scale-105 active:scale-95"
+                >
+                  Bureau Mainframe
+                </Link>
+                <Link 
+                  href="/dictionary" 
+                  className="bg-white text-zinc-950 py-5 rounded-2xl font-black uppercase tracking-widest transition-all hover:bg-neon-blue hover:scale-105 active:scale-95 shadow-xl shadow-white/5"
+                >
+                  Full Archives
+                </Link>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-slate-900 text-white pt-12 pb-24 px-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-8 opacity-10">
-          <Search size={200} />
-        </div>
-        <div className="max-w-4xl mx-auto relative z-10">
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex items-center gap-2">
-              <span className="bg-blue-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest">Case File</span>
-              <span className="bg-orange-500 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest">{caseData.difficulty}</span>
-            </div>
-            <Link href="/dictionary" className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-bold uppercase tracking-widest">
-              <BookOpen className="w-4 h-4" />
-              Dictionary
-            </Link>
+      {/* Top Nav / Back */}
+      <div className="max-w-5xl mx-auto px-6 pt-12">
+        <Link 
+          href="/"
+          className="inline-flex items-center gap-2 text-zinc-500 hover:text-neon-blue transition-colors text-xs font-black uppercase tracking-[0.2em] group"
+        >
+          <div className="w-8 h-8 rounded-xl bg-zinc-900 border border-white/5 flex items-center justify-center group-hover:border-neon-blue/30 group-hover:bg-neon-blue/5 transition-all">
+            <ChevronRight className="w-4 h-4 rotate-180" />
           </div>
-          <h1 className="text-4xl font-extrabold mb-4 font-mono tracking-tight">{caseData.title}</h1>
-          <p className="text-slate-300 text-lg max-w-2xl italic">"{caseData.description}"</p>
-        </div>
+          Abort Investigation
+        </Link>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 -mt-12 relative z-10">
-        {/* Evidence Section */}
-        {caseData.evidence.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden mb-8">
-            <div className="flex border-b border-gray-100 bg-gray-50/50">
-              {caseData.evidence.map((ev, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setActiveTab(idx)}
-                  className={`flex-1 px-6 py-4 font-bold text-sm flex items-center justify-center gap-2 transition-all ${
-                    activeTab === idx 
-                      ? 'bg-white text-blue-600 border-b-2 border-blue-600' 
-                      : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  <FileText size={16} />
-                  {ev.tab_name}
-                </button>
-              ))}
-            </div>
-            <div className="p-10 min-h-[200px] flex items-center">
-              <WordClicker 
-                text={caseData.evidence[activeTab]?.content || ''} 
-                languageCode={caseData.language_code} 
-                onWordClick={handleWordClick}
-              />
+      <div className="max-w-5xl mx-auto px-6 py-12">
+        <div className="relative mb-16">
+          <div className="absolute -left-6 top-0 bottom-0 w-1 bg-neon-blue shadow-[0_0_15px_rgba(0,242,255,0.5)]" />
+          <h1 className="text-6xl font-black uppercase tracking-tightest mb-4 leading-none">{caseData.title}</h1>
+          <div className="flex items-center gap-6">
+            <p className="text-zinc-400 text-xl font-medium max-w-2xl leading-relaxed italic">"{caseData.description}"</p>
+            <div className="hidden md:block h-px flex-1 bg-white/5" />
+            <div className="px-4 py-1.5 rounded-full bg-zinc-900 border border-white/10 text-[10px] font-black uppercase tracking-widest text-zinc-500 whitespace-nowrap">
+              STATION: {caseData.setting}
             </div>
           </div>
-        )}
+        </div>
 
-        {/* Interrogation Section */}
-        {caseData.witness && (
-          <div className="mb-12">
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-slate-800">
-              <ChevronRight className="text-blue-600" />
-              Interrogation
-            </h2>
-            <WitnessSection 
-              interaction={caseData.witness} 
-              languageCode={caseData.language_code} 
-              onWordClick={handleWordClick}
-            />
-          </div>
-        )}
-
-        {/* Deduction Section */}
-        <div className="bg-slate-900 text-white rounded-2xl p-8 shadow-2xl border-4 border-slate-800">
-          <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-            <Search className="text-blue-500" />
-            Make your deduction:
-          </h2>
-          <div className="grid gap-4">
-            {caseData.deductions.map((deduction, idx) => {
-              const isSelected = selectedDeduction === idx;
-              const isCorrect = deduction.is_correct;
-              
-              return (
-                <button
-                  key={idx}
-                  disabled={selectedDeduction !== null}
-                  onClick={() => handleDeductionClick(idx)}
-                  className={`text-left p-5 rounded-xl border-2 transition-all flex items-start gap-4 ${
-                    isSelected
-                      ? isCorrect 
-                        ? 'border-green-500 bg-green-500/10' 
-                        : 'border-red-500 bg-red-500/10'
-                      : 'border-slate-700 hover:border-slate-500 bg-slate-800/50'
-                  }`}
-                >
-                  <div className="mt-1">
-                    {isSelected ? (
-                      isCorrect ? <CheckCircle2 className="text-green-500" /> : <XCircle className="text-red-500" />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full border-2 border-slate-600" />
-                    )}
-                  </div>
-                  <div className="font-medium text-lg leading-snug">
-                    {deduction.option_text}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          
-          {selectedDeduction !== null && !showComplete && (
-            <div className="mt-8 pt-8 border-t border-slate-800 animate-in fade-in slide-in-from-bottom-4">
-              {caseData.deductions[selectedDeduction].is_correct ? (
-                <div className="text-center">
-                  <div className="text-green-400 text-4xl mb-4">Case Solved!</div>
-                  <p className="text-slate-400 mb-6">Excellent work, Detective. You've uncovered the truth.</p>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+          {/* Main Investigation Area */}
+          <div className="lg:col-span-2 space-y-12">
+            {caseData.evidence.length > 0 && (
+              <section className="animate-in fade-in slide-in-from-bottom-8 duration-500">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-2 h-6 bg-neon-blue rounded-full" />
+                  <h2 className="text-xl font-black uppercase tracking-tight">Evidence Dossier</h2>
                 </div>
-              ) : (
-                <div className="text-center">
-                  <div className="text-red-400 text-2xl mb-2">Wrong Deduction</div>
-                  <p className="text-slate-400">Review the evidence and try again.</p>
+                
+                <div className="bg-zinc-900/40 border border-white/5 rounded-[40px] shadow-2xl overflow-hidden backdrop-blur-md">
+                  <div className="flex bg-zinc-950/50 p-3 gap-2 border-b border-white/5 overflow-x-auto no-scrollbar">
+                    {caseData.evidence.map((ev, idx) => (
+                      <button 
+                        key={idx} 
+                        onClick={() => setActiveTab(idx)} 
+                        className={`px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all whitespace-nowrap ${
+                          activeTab === idx 
+                          ? 'bg-zinc-800 text-white border border-white/10 shadow-lg' 
+                          : 'text-zinc-600 hover:text-zinc-400'
+                        }`}
+                      >
+                        {tabTranslations[ev.tab_name] || ev.tab_name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="p-12 min-h-[300px] flex items-start relative group">
+                    <div className="absolute top-6 right-8 text-[8px] font-black text-zinc-800 tracking-[0.4em] uppercase pointer-events-none">
+                      DECRYPTED_SEGMENT_{activeTab + 1}
+                    </div>
+                    <WordClicker 
+                      text={caseData.evidence[activeTab]?.content || ''} 
+                      languageCode={caseData.language_code} 
+                      caseId={caseId} 
+                    />
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {caseData.witness && (
+              <section className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-150">
+                <WitnessSection 
+                  interaction={caseData.witness} 
+                  languageCode={caseData.language_code} 
+                  caseId={caseId} 
+                />
+              </section>
+            )}
+          </div>
+
+          {/* Sidebar - Deductions */}
+          <div className="space-y-8">
+            <section className="sticky top-12 animate-in fade-in slide-in-from-right-8 duration-700 delay-300">
+              <div className="bg-zinc-900 border border-white/10 rounded-[40px] p-8 shadow-2xl relative overflow-hidden">
+                {/* Scanner effect line */}
+                <div className="absolute top-0 left-0 w-full h-[1px] bg-neon-pink/30 animate-scanline pointer-events-none" />
+                
+                <div className="flex items-center gap-3 mb-8">
+                  <div className="w-10 h-10 rounded-2xl bg-zinc-950 border border-neon-pink/30 flex items-center justify-center">
+                    <Search className="text-neon-pink w-5 h-5" />
+                  </div>
+                  <h2 className="text-2xl font-black uppercase tracking-tight">Final Deduction</h2>
+                </div>
+                
+                <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest mb-6 leading-relaxed">
+                  Analyze all collected intelligence. Once you submit, the case file will be sealed.
+                </p>
+
+                <div className="space-y-4">
+                  {caseData.deductions.map((deduction, idx) => {
+                    const isSelected = selectedDeduction === idx;
+                    const isCorrect = deduction.is_correct;
+                    
+                    return (
+                      <button 
+                        key={idx} 
+                        disabled={selectedDeduction !== null} 
+                        onClick={() => handleDeductionClick(idx)} 
+                        className={`w-full text-left p-6 rounded-[24px] border-2 transition-all duration-300 relative group overflow-hidden ${
+                          selectedDeduction === idx 
+                          ? (isCorrect 
+                            ? 'border-case-green bg-case-green/10 shadow-[0_0_30px_rgba(59,255,122,0.1)]' 
+                            : 'border-case-red bg-case-red/10 shadow-[0_0_30px_rgba(255,59,59,0.1)]'
+                          ) 
+                          : 'border-white/5 bg-zinc-950/50 hover:border-white/20 hover:bg-zinc-950'
+                        }`}
+                      >
+                        {isSelected && (
+                          <div className={`absolute top-4 right-4 ${isCorrect ? 'text-case-green' : 'text-case-red'}`}>
+                            {isCorrect ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+                          </div>
+                        )}
+                        <p className={`font-bold leading-tight ${isSelected ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
+                          {deduction.option_text}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedDeduction !== null && !caseData.deductions[selectedDeduction].is_correct && (
                   <button 
                     onClick={() => setSelectedDeduction(null)}
-                    className="mt-4 text-blue-400 font-bold hover:underline"
+                    className="w-full mt-6 py-4 rounded-2xl border border-white/10 text-xs font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:bg-white/5 transition-all"
                   >
-                    Retry Case
+                    Re-evaluate Evidence
                   </button>
+                )}
+              </div>
+              
+              <div className="mt-8 p-6 bg-zinc-900/40 border border-white/5 rounded-[32px] backdrop-blur-sm">
+                <div className="flex items-center gap-3 mb-2">
+                  <ShieldCheck className="w-4 h-4 text-neon-blue" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">L.I.B. Field Agent Note</span>
                 </div>
-              )}
-            </div>
-          )}
+                <p className="text-zinc-500 text-[10px] leading-relaxed uppercase font-bold tracking-wider">
+                  Click on words in the evidence or witness statements to log them in your dictionary. 
+                  Linguistic mastery is 90% of the investigation.
+                </p>
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </main>
